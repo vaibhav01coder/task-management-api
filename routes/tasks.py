@@ -9,14 +9,16 @@ from models.task import Task
 from queries.search import build_search_query
 from queries.summary import get_summary
 from validators.search_validator import validate_search_param
-from validators.task_validator import validate_create_payload, validate_update_payload
+from validators.task_validator import (
+    VALID_PRIORITIES,
+    VALID_STATUSES,
+    validate_create_payload,
+    validate_update_payload,
+)
 
 logger = logging.getLogger(__name__)
 
 tasks_bp = Blueprint("tasks", __name__, url_prefix="/tasks")
-
-VALID_STATUSES = {"pending", "in_progress", "complete"}
-VALID_PRIORITIES = {"low", "medium", "high"}
 
 
 def _task_not_found(task_id):
