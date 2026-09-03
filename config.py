@@ -8,6 +8,8 @@ load_dotenv()
 class BaseConfig:
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     JSON_SORT_KEYS = False
+    LOG_SEARCH_TERMS: bool = os.getenv("LOG_SEARCH_TERMS", "true").lower() == "true"
+    LOG_SEARCH_TERM_MAX_CHARS: int = 32
 
 
 class DevelopmentConfig(BaseConfig):
