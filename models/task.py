@@ -27,6 +27,10 @@ class Task(db.Model):
         Index("ix_tasks_status", "status"),
         Index("ix_tasks_priority", "priority"),
         Index("ix_tasks_status_priority", "status", "priority"),
+        Index("ix_tasks_title_trgm", "title",
+              postgresql_using="gin", postgresql_ops={"title": "gin_trgm_ops"}),
+        Index("ix_tasks_description_trgm", "description",
+              postgresql_using="gin", postgresql_ops={"description": "gin_trgm_ops"}),
     )
 
     def to_dict(self):

@@ -1,0 +1,274 @@
+
+================================================================================
+                     TASK MANAGEMENT API — PROJECT FLOW
+================================================================================
+
+--------------------------------------------------------------------------------
+1. PROJECT STRUCTURE
+--------------------------------------------------------------------------------
+
+task-management-api/
+│
+├── app.py                        ← Application factory (entry point)
+├── config.py                     ← Dev / Test / Prod configuration
+├── extensions.py                 ← Shared SQLAlchemy db instance
+├── requirements.txt              ← Python dependencies
+│
+├── models/
+│   └── task.py                   ← Task ORM model + DB indexes
+│
+├── routes/
+│   └── tasks.py                  ← All HTTP endpoints (Blueprint)
+│
+├── validators/
+│   ├── task_validator.py         ← Create/update body validation
+│   └── search_validator.py       ← Search query param validation
+│
+├── queries/
+│   ├── search.py                 ← ilike OR-filter + AND-chain builder
+│   └── summary.py                ← COUNT queries (total/status/priority)
+│
+├── middleware/
+│   ├── logger.py                 ← Request/response logger + duration
+│   └── error_handlers.py         ← 400/404/500 → JSON error response
+│
+├── tests/
+│   ├── test_tasks.py             ← 39 tests (CRUD + complete + errors)
+│   ├── test_search.py            ← 11 tests (search happy path + edge)
+│   └── test_summary.py           ← 6 tests (summary counts + consistency)
+│
+└── docs/
+    ├── requirements-kan4.md      ← Feature requirements (FR + NFR)
+    ├── architecture-kan4.md      ← Architecture design decisions
+    ├── design-review-kan4.md     ← Risk register + sign-off
+    ├── impl-plan-kan4.md         ← Implementation plan + milestones
+    ├── flowchart.md              ← Component diagram (ASCII)
+    └── project_flow.txt          ← This file
+
+
+--------------------------------------------------------------------------------
+2. REQUEST LIFECYCLE
+--------------------------------------------------------------------------------
+
+  CLIENT
+    │
+    │  HTTP Request (GET / POST / PUT / DELETE / PATCH)
+    │
+    ▼
+  ┌─────────────────────────────────┐
+  │  middleware/logger.py           │
+  │  before_request                 │
+  │  → record start time            │
+  │  → log "→ METHOD /path"         │
+  └────────────┬────────────────────┘
+               │
+               ▼
+  ┌─────────────────────────────────┐
+  │  routes/tasks.py                │
+  │  Flask Blueprint  /tasks        │
+  │                                 │
+  │  Match URL to handler:          │
+  │  POST   /tasks        → create  │
+  │  GET    /tasks        → list    │
+  │  GET    /tasks/summary→ summary │
+  │  GET    /tasks/<id>   → get     │
+  │  PUT    /tasks/<id>   → update  │
+  │  DELETE /tasks/<id>   → delete  │
+  │  PATCH  /tasks/<id>/  → complete│
+  │         complete                │
+  └────────────┬────────────────────┘
+               │
+    ┌──────────┼───────────────┐
+    │          │               │
+    ▼          ▼               ▼
+  CREATE     LIST/SEARCH    SUMMARY
+  or UPDATE  handler        handler
+    │          │               │
+    ▼          ▼               ▼
+  validators/ validators/   queries/
+  task_       search_       summary.py
+  validator   validator     │
+  .py         .py           │ REPEATABLE READ
+  │           │             │ COUNT total
+  │ check:    │ check:      │ COUNT by_status
+  │ title     │ blank→400   │ COUNT by_priority
+  │ priority  │ space→400   │
+  │ due_date  │ >200 →400   │
+  │ status    │ ✓ strip     │
+  └─────┬─────┴──────┬──────┘
+        │            │
+        ▼            ▼
+  ┌───────────────────────────┐
+  │  queries/search.py        │
+  │  (list/search only)       │
+  │                           │
+  │  Task.title.ilike(%kw%)   │
+  │  OR                       │
+  │  Task.description         │
+  │    .ilike(%kw%)           │
+  │  AND status == ?          │
+  │  AND priority == ?        │
+  └─────────────┬─────────────┘
+                │
+                ▼
+  ┌───────────────────────────┐
+  │  models/task.py           │
+  │                           │
+  │  class Task(db.Model)     │
+  │  id            INTEGER PK │
+  │  title         VARCHAR255 │
+  │  description   TEXT       │
+  │  priority      VARCHAR10  │
+  │  status        VARCHAR20  │
+  │  due_date      DATE       │
+  │  created_at    DATETIME   │
+  │  updated_at    DATETIME   │
+  │  completed_at  DATETIME   │
+  └─────────────┬─────────────┘
+                │
+                ▼
+  ┌───────────────────────────┐
+  │  extensions.py            │
+  │  db = SQLAlchemy()        │
+  │                           │
+  │  DEV/TEST  → SQLite       │
+  │  PROD      → PostgreSQL   │
+  └─────────────┬─────────────┘
+                │
+                │  Query executes, result returns
+                │
+                ▼
+  ┌─────────────────────────────────┐
+  │  routes/tasks.py                │
+  │  → serialize via task.to_dict() │
+  │  → return jsonify(...), 2xx     │
+  └────────────┬────────────────────┘
+               │
+               ▼
+  ┌─────────────────────────────────┐
+  │  middleware/logger.py           │
+  │  after_request                  │
+  │  → compute duration (ms)        │
+  │  → log search term (≤32 chars)  │
+  │  → log "← METHOD /path STATUS   │
+  │         (Xms)"                  │
+  └────────────┬────────────────────┘
+               │
+               ▼
+  ┌─────────────────────────────────┐
+  │  middleware/error_handlers.py   │
+  │  (only triggered on exception)  │
+  │  400 → {"error": "..."}         │
+  │  404 → {"error": "Not found"}   │
+  │  500 → {"error": "Internal..."}  │
+  └────────────┬────────────────────┘
+               │
+               │  JSON Response
+               ▼
+  CLIENT
+
+
+--------------------------------------------------------------------------------
+3. API ENDPOINTS
+--------------------------------------------------------------------------------
+
+  METHOD   ENDPOINT                  DESCRIPTION
+  -------  ------------------------  -------------------------------------------
+  POST     /tasks                    Create a new task
+  GET      /tasks                    List tasks (paginate / filter / search)
+  GET      /tasks/summary            Aggregate counts by status and priority
+  GET      /tasks/<id>               Get a single task by ID
+  PUT      /tasks/<id>               Update task fields
+  DELETE   /tasks/<id>               Delete a task
+  PATCH    /tasks/<id>/complete      Mark task as complete
+
+
+--------------------------------------------------------------------------------
+4. SEARCH & SUMMARY (KAN-4 FEATURE)
+--------------------------------------------------------------------------------
+
+  GET /tasks?search=<keyword>
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │  1. Extract ?search= from query string                              │
+  │  2. validate_search_param()                                         │
+  │       blank string      → 400 {"message": "search term must not..."}│
+  │       whitespace only   → 400                                       │
+  │       length > 200      → 400                                       │
+  │       valid             → strip whitespace, pass on                 │
+  │  3. build_search_query()                                            │
+  │       SQL: WHERE (title ILIKE '%kw%' OR description ILIKE '%kw%')  │
+  │            AND status = ?    (if ?status= provided)                 │
+  │            AND priority = ?  (if ?priority= provided)              │
+  │  4. Paginate → return {tasks, total, page, limit, pages}           │
+  └─────────────────────────────────────────────────────────────────────┘
+
+  GET /tasks/summary
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │  1. Set REPEATABLE READ isolation (PostgreSQL)                      │
+  │     SQLite: try/except fallback, log debug warning                 │
+  │  2. COUNT(id)                          → total                      │
+  │  3. GROUP BY status  COUNT(id)         → by_status  {k: n, ...}    │
+  │  4. GROUP BY priority COUNT(id)        → by_priority {k: n, ...}   │
+  │  5. Return {total, by_status, by_priority}                         │
+  │                                                                     │
+  │  Example response:                                                  │
+  │  {                                                                  │
+  │    "total": 10,                                                     │
+  │    "by_status":   {"pending": 5, "in_progress": 3, "complete": 2}  │
+  │    "by_priority": {"high": 4, "medium": 4, "low": 2}               │
+  │  }                                                                  │
+  └─────────────────────────────────────────────────────────────────────┘
+
+
+--------------------------------------------------------------------------------
+5. DATABASE INDEXES
+--------------------------------------------------------------------------------
+
+  INDEX NAME                  COLUMNS              TYPE
+  --------------------------  -------------------  ----------------------------
+  ix_tasks_status             status               B-tree
+  ix_tasks_priority           priority             B-tree
+  ix_tasks_status_priority    status, priority     Composite B-tree
+  ix_tasks_title_trgm         title                GIN trgm (PostgreSQL)
+                                                   B-tree  (SQLite fallback)
+  ix_tasks_description_trgm  description          GIN trgm (PostgreSQL)
+                                                   B-tree  (SQLite fallback)
+
+
+--------------------------------------------------------------------------------
+6. CONFIGURATION
+--------------------------------------------------------------------------------
+
+  CLASS             FLASK_ENV       DATABASE              DEBUG
+  ----------------  --------------  --------------------  ------
+  DevelopmentConfig development     SQLite tasks.db       True
+  TestingConfig     testing         SQLite :memory:       False
+  ProductionConfig  production      PostgreSQL (env var)  False
+
+  Environment variables:
+    DATABASE_URL          PostgreSQL connection string (production required)
+    FLASK_ENV             development | testing | production
+    PORT                  HTTP port (default 5000)
+    LOG_SEARCH_TERMS      true | false  (default true)
+    LOG_SEARCH_TERM_MAX_CHARS  integer (default 32)
+
+
+--------------------------------------------------------------------------------
+7. SDLC PIPELINE (KAN-4)
+--------------------------------------------------------------------------------
+
+  STEP  NAME                  ARTIFACT                         STATUS
+  ----  --------------------  -------------------------------  --------
+  1     Requirements          docs/requirements-kan4.md        Done
+  2     Architecture          docs/architecture-kan4.md        Done
+  3     Design Review         docs/design-review-kan4.md       Done
+                              docs/design-review-signoff-      Done
+                                    kan4.json
+  4     Implementation Plan   docs/impl-plan-kan4.md           Done
+  5     Implementation        src code + 17 new tests          Done
+  6     Code Review (Claude)  56/56 pass, 0 blockers           Done
+  7     Verify                56 passed, 1 warning (expected)  Done
+  8     Pull Request          PR #1 on GitHub                  Open
+
+
+================================================================================
